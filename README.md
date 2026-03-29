@@ -1,4 +1,4 @@
-# godot_scene_generator
+# Grid Wall Builder for Godot
 
 Small Rust desktop app (eframe/egui) for drawing a grid-based wall layout and exporting it as a Godot 4 `.tscn` scene.
 
