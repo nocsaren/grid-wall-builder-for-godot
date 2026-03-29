@@ -16,7 +16,7 @@ mod grid;
 fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions::default();
     eframe::run_native(
-        "Grid Wall Builder",
+        "Grid Wall Builder for Godot",
         options,
         Box::new(|_cc| Box::new(app::App::default())),
     )
