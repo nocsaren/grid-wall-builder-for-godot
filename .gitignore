@@ -1,0 +1,19 @@
+# Rust / Cargo
+/target/
+**/*.rs.bk
+
+# Note: This is a binary app; `Cargo.lock` should be committed.
+
+# IDEs / editors
+.vscode/
+.idea/
+*.iml
+
+# OS / misc
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.log
+
+# RFD / native dialog temporary files (safe defaults)
+*.tmp

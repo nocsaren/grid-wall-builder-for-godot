@@ -1,0 +1,11 @@
+[package]
+name = "godot_scene_generator"
+version = "1.0.0"
+edition = "2021"
+description = "Small eframe/egui tool to draw a grid wall layout and export a Godot 4 .tscn scene."
+license = "MIT"
+readme = "README.md"
+
+[dependencies]
+eframe = "0.27"
+rfd = "0.14"
