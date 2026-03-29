@@ -19,6 +19,9 @@ pub struct App {
 
     grid: Grid,
 
+    paint_value: Option<bool>,
+    last_painted_cell: Option<(usize, usize)>,
+
     name: String,
     output: String,
 }
@@ -36,6 +39,8 @@ impl Default for App {
             grid_w,
             grid_h,
             grid: Grid::new(grid_w, grid_h),
+            paint_value: None,
+            last_painted_cell: None,
             name: "GridWall".to_string(),
             output: String::new(),
         }
@@ -43,6 +48,41 @@ impl Default for App {
 }
 
 impl App {
+    fn paint_cell(&mut self, x: usize, y: usize, value: bool) {
+        if x < self.grid.width() && y < self.grid.height() {
+            self.grid.cells_mut()[x][y] = value;
+        }
+    }
+
+    fn paint_line(&mut self, from: (usize, usize), to: (usize, usize), value: bool) {
+        let (mut x0, mut y0) = (from.0 as isize, from.1 as isize);
+        let (x1, y1) = (to.0 as isize, to.1 as isize);
+
+        let dx = (x1 - x0).abs();
+        let sx = if x0 < x1 { 1 } else { -1 };
+        let dy = -(y1 - y0).abs();
+        let sy = if y0 < y1 { 1 } else { -1 };
+        let mut err = dx + dy;
+
+        loop {
+            self.paint_cell(x0 as usize, y0 as usize, value);
+
+            if x0 == x1 && y0 == y1 {
+                break;
+            }
+
+            let twice_err = 2 * err;
+            if twice_err >= dy {
+                err += dy;
+                x0 += sx;
+            }
+            if twice_err <= dx {
+                err += dx;
+                y0 += sy;
+            }
+        }
+    }
+
     fn ensure_grid_size(&mut self) {
         if self.grid.width() != self.grid_w || self.grid.height() != self.grid_h {
             self.grid.resize_preserve(self.grid_w, self.grid_h);
@@ -68,11 +108,50 @@ impl App {
 
         let (response, painter) = ui.allocate_painter(
             egui::vec2(grid_w as f32 * cell_size, grid_h as f32 * cell_size),
-            egui::Sense::click(),
+            egui::Sense::click_and_drag(),
         );
 
         let rect = response.rect;
-        let cells = self.grid.cells_mut();
+        let paint_value = ui.input(|input| {
+            if input.pointer.button_down(egui::PointerButton::Primary) {
+                Some(true)
+            } else if input.pointer.button_down(egui::PointerButton::Secondary) {
+                Some(false)
+            } else {
+                None
+            }
+        });
+
+        if let Some(paint_value) = paint_value {
+            if self.paint_value != Some(paint_value) {
+                self.paint_value = Some(paint_value);
+                self.last_painted_cell = None;
+            }
+
+            if let Some(pos) = response.interact_pointer_pos() {
+                if rect.contains(pos) {
+                    let x = ((pos.x - rect.left()) / cell_size).floor() as usize;
+                    let y = ((pos.y - rect.top()) / cell_size).floor() as usize;
+
+                    if x < grid_w && y < grid_h {
+                        let current_cell = (x, y);
+
+                        if let Some(previous_cell) = self.last_painted_cell {
+                            self.paint_line(previous_cell, current_cell, paint_value);
+                        } else {
+                            self.paint_cell(x, y, paint_value);
+                        }
+
+                        self.last_painted_cell = Some(current_cell);
+                    }
+                }
+            }
+        } else {
+            self.paint_value = None;
+            self.last_painted_cell = None;
+        }
+
+        let cells = self.grid.cells();
 
         for x in 0..grid_w {
             for y in 0..grid_h {
@@ -92,20 +171,6 @@ impl App {
 
                 painter.rect_filled(r, 0.0, color);
                 painter.rect_stroke(r, 0.0, (1.0, egui::Color32::DARK_GRAY));
-
-                if response.hovered() {
-                    if let Some(pos) = response.interact_pointer_pos() {
-                        if r.contains(pos) {
-                            if ui.input(|i| i.pointer.primary_clicked()) {
-                                cells[x][y] = true;
-                            }
-
-                            if ui.input(|i| i.pointer.secondary_clicked()) {
-                                cells[x][y] = false;
-                            }
-                        }
-                    }
-                }
             }
         }
     }
@@ -138,7 +203,7 @@ impl eframe::App for App {
 
             ui.separator();
 
-            ui.label("Left click = place wall cell | Right click = remove");
+            ui.label("Left drag = paint wall cell | Right drag = remove");
             self.draw_grid(ui);
 
             ui.separator();

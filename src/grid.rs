@@ -51,6 +51,11 @@ impl Grid {
         &mut self.cells
     }
 
+    /// Immutable access to the cell storage.
+    pub fn cells(&self) -> &Vec<Vec<bool>> {
+        &self.cells
+    }
+
     /// Resize the grid, preserving any overlapping painted cells.
     pub fn resize_preserve(&mut self, new_width: usize, new_height: usize) {
         let mut next_cells = vec![vec![false; new_height]; new_width];
