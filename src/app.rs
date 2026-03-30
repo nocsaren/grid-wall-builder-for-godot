@@ -9,6 +9,7 @@ use eframe::egui;
 use rfd::FileDialog;
 
 use crate::godot_scene::{generate_scene, ExportSettings};
+use crate::godot_scene_import::{import_scene, ImportedScene};
 use crate::grid::Grid;
 
 pub struct App {
@@ -48,6 +49,17 @@ impl Default for App {
 }
 
 impl App {
+    fn apply_imported_scene(&mut self, imported: ImportedScene) {
+        self.name = imported.name;
+        self.export = imported.export;
+        self.grid_w = imported.grid.width();
+        self.grid_h = imported.grid.height();
+        self.grid = imported.grid;
+        self.output = self.generate();
+        self.paint_value = None;
+        self.last_painted_cell = None;
+    }
+
     fn paint_cell(&mut self, x: usize, y: usize, value: bool) {
         if x < self.grid.width() && y < self.grid.height() {
             self.grid.cells_mut()[x][y] = value;
@@ -210,6 +222,25 @@ impl eframe::App for App {
 
             if ui.button("Generate Scene").clicked() {
                 self.output = self.generate();
+            }
+
+            if ui.button("Load Scene").clicked() {
+                if let Some(path) = FileDialog::new()
+                    .add_filter("Godot Scene", &["tscn"])
+                    .pick_file()
+                {
+                    match std::fs::read_to_string(&path) {
+                        Ok(text) => match import_scene(&text) {
+                            Ok(imported) => self.apply_imported_scene(imported),
+                            Err(error) => {
+                                self.output = format!("Import failed: {error}");
+                            }
+                        },
+                        Err(error) => {
+                            self.output = format!("Could not read file: {error}");
+                        }
+                    }
+                }
             }
 
             if ui.button("Save Scene").clicked() {

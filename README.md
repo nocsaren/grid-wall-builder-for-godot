@@ -7,10 +7,11 @@ The editor is grid-based, and the export produces 3D `StaticBody3D` wall segment
 ## Workflow
 
 1. Set the grid width and height.
-2. Click cells to place wall tiles.
-3. Right click to remove tiles.
-4. Generate the scene.
-5. Save the result as a `.tscn` file.
+2. Load a `.tscn` file exported by this tool, if you want to edit an existing layout.
+3. Click cells to place wall tiles.
+4. Right click to remove tiles.
+5. Generate the scene.
+6. Save the result as a `.tscn` file.
 
 ## Build / Run
 
@@ -28,6 +29,12 @@ Filled cells are merged into rectangular wall segments before export, so adjacen
 
 The exported wall thickness on Z is controlled separately with the Z size setting.
 
+## Import behavior
+
+The file picker only accepts supported scenes.
+
+The loader will import scenes exported by this app, including older exports that do not have the new metadata comments. If a file uses a more complex or unrelated Godot scene structure, it is rejected instead of being partially imported.
+
 ### Coordinate system
 
 The UI grid uses the typical screen convention: X increases to the right, Y increases downward.
@@ -44,4 +51,5 @@ Feel free to send pull requests. Any improvements are appreciated.
 
 ### Changelog
 
+1.2.0 Added file picker import for supported `.tscn` files with strict validation.
 1.1.0 Grid painting added. Removed z offset.

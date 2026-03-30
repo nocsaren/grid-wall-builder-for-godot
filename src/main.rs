@@ -11,6 +11,7 @@
 
 mod app;
 mod godot_scene;
+mod godot_scene_import;
 mod grid;
 
 fn main() -> Result<(), eframe::Error> {

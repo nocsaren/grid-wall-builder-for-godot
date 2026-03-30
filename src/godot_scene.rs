@@ -35,7 +35,15 @@ pub fn generate_scene(
     settings: &ExportSettings,
     segments: &[Segment],
 ) -> String {
-    let mut scene = String::from("[gd_scene format=3]\n\n");
+    let mut scene = String::new();
+
+    let _ = writeln!(scene, "; generated-by=grid-wall-builder-for-godot");
+    let _ = writeln!(
+        scene,
+        "; grid_w={} grid_h={} unit_size={} z_size={}",
+        _grid_w, grid_h, settings.unit_size, settings.z_size
+    );
+    let _ = writeln!(scene, "[gd_scene format=3]\n");
 
     for (id, segment) in segments.iter().enumerate() {
         let width = segment.width as f32 * settings.unit_size;
