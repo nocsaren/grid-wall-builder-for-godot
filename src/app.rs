@@ -28,8 +28,8 @@ pub struct App {
 
 impl Default for App {
     fn default() -> Self {
-        let grid_w = 10;
-        let grid_h = 5;
+        let grid_w = 12;
+        let grid_h = 6;
 
         Self {
             export: ExportSettings {

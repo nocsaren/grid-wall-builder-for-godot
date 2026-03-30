@@ -69,7 +69,7 @@ pub fn generate_scene(
         //   so the full layout ends up in +Y.
         let offset_x = world_x + width / 2.0;
         let offset_y = total_height - (world_y + height / 2.0);
-        let offset_z = settings.z_size / 2.0;
+        let offset_z = 0.0; // flat on the X/Y plane, with thickness along Z
 
         let _ = write!(
             scene,

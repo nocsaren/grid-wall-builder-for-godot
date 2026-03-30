@@ -41,3 +41,7 @@ Godot 3D is Y-up. The exporter maps the grid into Godot like this:
 Net effect: the entire layout sits in **positive Godot Y** (above the X axis), and increasing grid Y moves walls “down” in the editor.
 
 Feel free to send pull requests. Any improvements are appreciated.
+
+### Changelog
+
+1.1.0 Grid painting added. Removed z offset.
