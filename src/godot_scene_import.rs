@@ -1,5 +1,5 @@
 use crate::godot_scene::ExportSettings;
-use crate::grid::{Grid, Segment};
+use crate::grid::Grid;
 
 const EXPORT_MARKER: &str = "; generated-by=grid-wall-builder-for-godot";
 const FLOAT_TOLERANCE: f32 = 0.0001;
@@ -49,6 +49,7 @@ struct Metadata {
     grid_h: usize,
     unit_size: f32,
     z_size: f32,
+    include_backplanes: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -73,6 +74,7 @@ pub fn import_scene(text: &str) -> Result<ImportedScene, ImportError> {
 
     let mut resources = Vec::new();
     let mut raw_segments = Vec::new();
+    let mut has_backplanes = false;
     let root_name;
 
     loop {
@@ -80,7 +82,12 @@ pub fn import_scene(text: &str) -> Result<ImportedScene, ImportError> {
             Some(line) if line.starts_with("[sub_resource type=\"BoxMesh\" id=\"BoxMesh_") => {
                 resources.push(parser.parse_resource_pair(resources.len())?);
             }
-            Some(line) if line.starts_with("[node name=\"") && line.contains(" type=\"Node3D\"]") => {
+            Some(line) if line.starts_with("[sub_resource type=\"PlaneMesh\" id=\"PlaneMesh_") => {
+                parser.skip_plane_mesh_resource()?;
+            }
+            Some(line)
+                if line.starts_with("[node name=\"") && line.contains(" type=\"Node3D\"]") =>
+            {
                 root_name = parser.parse_root_node()?;
                 break;
             }
@@ -103,7 +110,39 @@ pub fn import_scene(text: &str) -> Result<ImportedScene, ImportError> {
     }
 
     while parser.peek_line().is_some() {
-        raw_segments.push(parser.parse_segment(&resources)?);
+        let line = parser.peek_line().unwrap();
+
+        if line.starts_with("[node name=\"BoxMeshes\" type=\"Node3D\"")
+            && line.contains(" parent=\".\"]")
+        {
+            parser.next_line();
+            while parser.peek_line().map_or(false, |line| {
+                line.starts_with("[node name=\"Segment_")
+                    && line.contains(" type=\"StaticBody3D\"")
+                    && line.contains(" parent=\"BoxMeshes\"]")
+            }) {
+                raw_segments.push(parser.parse_segment(&resources, "BoxMeshes")?);
+            }
+        } else if line.starts_with("[node name=\"BackPlanes\" type=\"Node3D\"")
+            && line.contains(" parent=\".\"]")
+        {
+            has_backplanes = true;
+            parser.next_line();
+            while parser.peek_line().map_or(false, |line| {
+                line.starts_with("[node name=\"") && line.contains(" parent=\"BackPlanes\"]")
+            }) {
+                parser.skip_node_block();
+            }
+        } else if line.starts_with("[node name=\"Segment_")
+            && line.contains(" type=\"StaticBody3D\"")
+            && line.contains(" parent=\".\"]")
+        {
+            raw_segments.push(parser.parse_segment(&resources, ".")?);
+        } else {
+            return Err(ImportError::Unsupported(format!(
+                "Unsupported scene content: {line}"
+            )));
+        }
     }
 
     if raw_segments.is_empty() {
@@ -117,11 +156,13 @@ pub fn import_scene(text: &str) -> Result<ImportedScene, ImportError> {
             ExportSettings {
                 unit_size: metadata.unit_size,
                 z_size: metadata.z_size,
+                include_backplanes: metadata.include_backplanes.unwrap_or(has_backplanes),
             }
         } else {
             ExportSettings {
                 unit_size: 1.0,
                 z_size: 0.1,
+                include_backplanes: has_backplanes,
             }
         };
 
@@ -150,11 +191,23 @@ pub fn import_scene(text: &str) -> Result<ImportedScene, ImportError> {
     let grid_w = metadata
         .as_ref()
         .map(|metadata| metadata.grid_w)
-        .unwrap_or_else(|| imported_segments.iter().map(|segment| segment.start_x + segment.width).max().unwrap_or(0));
+        .unwrap_or_else(|| {
+            imported_segments
+                .iter()
+                .map(|segment| segment.start_x + segment.width)
+                .max()
+                .unwrap_or(0)
+        });
     let grid_h = metadata
         .as_ref()
         .map(|metadata| metadata.grid_h)
-        .unwrap_or_else(|| imported_segments.iter().map(|segment| segment.start_y + segment.height).max().unwrap_or(0));
+        .unwrap_or_else(|| {
+            imported_segments
+                .iter()
+                .map(|segment| segment.start_y + segment.height)
+                .max()
+                .unwrap_or(0)
+        });
 
     let mut grid = Grid::new(grid_w, grid_h);
 
@@ -166,7 +219,8 @@ pub fn import_scene(text: &str) -> Result<ImportedScene, ImportError> {
 
                 if x >= grid.width() || y >= grid.height() {
                     return Err(ImportError::Invalid(
-                        "Imported scene contains cells outside the declared grid bounds".to_string(),
+                        "Imported scene contains cells outside the declared grid bounds"
+                            .to_string(),
                     ));
                 }
 
@@ -185,11 +239,13 @@ pub fn import_scene(text: &str) -> Result<ImportedScene, ImportError> {
         ExportSettings {
             unit_size: metadata.unit_size,
             z_size: metadata.z_size,
+            include_backplanes: metadata.include_backplanes.unwrap_or(has_backplanes),
         }
     } else {
         ExportSettings {
             unit_size,
             z_size: infer_z_size(&resources)?,
+            include_backplanes: has_backplanes,
         }
     };
 
@@ -207,7 +263,10 @@ fn convert_segment_with_metadata(
 ) -> Result<SegmentImport, ImportError> {
     let width = float_to_index(segment.width / unit_size, "segment width")?;
     let height = float_to_index(segment.height / unit_size, "segment height")?;
-    let start_x = float_to_index(segment.offset_x / unit_size - width as f32 / 2.0, "segment start_x")?;
+    let start_x = float_to_index(
+        segment.offset_x / unit_size - width as f32 / 2.0,
+        "segment start_x",
+    )?;
     let start_y = float_to_index(
         metadata.grid_h as f32 - (segment.offset_y / unit_size) - height as f32 / 2.0,
         "segment start_y",
@@ -235,7 +294,10 @@ fn normalize_legacy_segments(
         .map(|segment| {
             let width = float_to_index(segment.width / unit_size, "segment width")?;
             let height = float_to_index(segment.height / unit_size, "segment height")?;
-            let start_x = float_to_index(segment.offset_x / unit_size - width as f32 / 2.0, "segment start_x")?;
+            let start_x = float_to_index(
+                segment.offset_x / unit_size - width as f32 / 2.0,
+                "segment start_x",
+            )?;
             let start_y = float_to_index(
                 (top_edge_world - (segment.offset_y + segment.height / 2.0)) / unit_size,
                 "segment start_y",
@@ -295,7 +357,8 @@ fn infer_z_size(resources: &[ResourceRecord]) -> Result<f32, ImportError> {
         }
     }
 
-    z_size.ok_or_else(|| ImportError::Invalid("Missing wall thickness in imported scene".to_string()))
+    z_size
+        .ok_or_else(|| ImportError::Invalid("Missing wall thickness in imported scene".to_string()))
 }
 
 fn gcd_i64(left: i64, right: i64) -> i64 {
@@ -379,6 +442,7 @@ impl<'a> SceneParser<'a> {
         let mut grid_h = None;
         let mut unit_size = None;
         let mut z_size = None;
+        let mut include_backplanes = None;
 
         for part in line.trim_start_matches(';').split_whitespace() {
             let mut split = part.splitn(2, '=');
@@ -390,6 +454,9 @@ impl<'a> SceneParser<'a> {
                 "grid_h" => grid_h = Some(parse_usize(value, "grid_h")?),
                 "unit_size" => unit_size = Some(parse_f32(value, "unit_size")?),
                 "z_size" => z_size = Some(parse_f32(value, "z_size")?),
+                "include_backplanes" => {
+                    include_backplanes = Some(parse_bool(value, "include_backplanes")?)
+                }
                 _ => {
                     return Err(ImportError::Unsupported(format!(
                         "Unexpected metadata key `{key}`"
@@ -399,11 +466,33 @@ impl<'a> SceneParser<'a> {
         }
 
         Ok(Metadata {
-            grid_w: grid_w.ok_or_else(|| ImportError::Invalid("Missing grid_w metadata".to_string()))?,
-            grid_h: grid_h.ok_or_else(|| ImportError::Invalid("Missing grid_h metadata".to_string()))?,
-            unit_size: unit_size.ok_or_else(|| ImportError::Invalid("Missing unit_size metadata".to_string()))?,
-            z_size: z_size.ok_or_else(|| ImportError::Invalid("Missing z_size metadata".to_string()))?,
+            grid_w: grid_w
+                .ok_or_else(|| ImportError::Invalid("Missing grid_w metadata".to_string()))?,
+            grid_h: grid_h
+                .ok_or_else(|| ImportError::Invalid("Missing grid_h metadata".to_string()))?,
+            unit_size: unit_size
+                .ok_or_else(|| ImportError::Invalid("Missing unit_size metadata".to_string()))?,
+            z_size: z_size
+                .ok_or_else(|| ImportError::Invalid("Missing z_size metadata".to_string()))?,
+            include_backplanes,
         })
+    }
+
+    fn skip_plane_mesh_resource(&mut self) -> Result<(), ImportError> {
+        let mesh_line = self
+            .next_line()
+            .ok_or_else(|| ImportError::Invalid("Expected PlaneMesh resource block".to_string()))?;
+        if !mesh_line.starts_with("[sub_resource type=\"PlaneMesh\" id=\"PlaneMesh_") {
+            return Err(ImportError::Unsupported(format!(
+                "Unsupported PlaneMesh resource block: {mesh_line}"
+            )));
+        }
+
+        let size_line = self
+            .next_line()
+            .ok_or_else(|| ImportError::Invalid("Expected PlaneMesh size line".to_string()))?;
+        parse_vector2_line(size_line, "size = Vector2(")?;
+        Ok(())
     }
 
     fn parse_resource_pair(&mut self, expected_id: usize) -> Result<ResourceRecord, ImportError> {
@@ -420,11 +509,12 @@ impl<'a> SceneParser<'a> {
         let mesh_size_line = self
             .next_line()
             .ok_or_else(|| ImportError::Invalid("Expected BoxMesh size line".to_string()))?;
-        let (mesh_width, mesh_height, mesh_depth) = parse_vector3_line(mesh_size_line, "size = Vector3(")?;
+        let (mesh_width, mesh_height, mesh_depth) =
+            parse_vector3_line(mesh_size_line, "size = Vector3(")?;
 
-        let shape_line = self
-            .next_line()
-            .ok_or_else(|| ImportError::Invalid("Expected BoxShape3D resource block".to_string()))?;
+        let shape_line = self.next_line().ok_or_else(|| {
+            ImportError::Invalid("Expected BoxShape3D resource block".to_string())
+        })?;
         let shape_id = parse_resource_id(
             shape_line,
             "[sub_resource type=\"BoxShape3D\" id=\"BoxShape3D_",
@@ -438,7 +528,8 @@ impl<'a> SceneParser<'a> {
         let shape_size_line = self
             .next_line()
             .ok_or_else(|| ImportError::Invalid("Expected BoxShape3D size line".to_string()))?;
-        let (shape_width, shape_height, shape_depth) = parse_vector3_line(shape_size_line, "size = Vector3(")?;
+        let (shape_width, shape_height, shape_depth) =
+            parse_vector3_line(shape_size_line, "size = Vector3(")?;
 
         if (mesh_width - shape_width).abs() > FLOAT_TOLERANCE
             || (mesh_height - shape_height).abs() > FLOAT_TOLERANCE
@@ -463,12 +554,21 @@ impl<'a> SceneParser<'a> {
         parse_node_line(line, "Node3D", None)
     }
 
-    fn parse_segment(&mut self, resources: &[ResourceRecord]) -> Result<RawSegment, ImportError> {
-        let segment_line = self
-            .next_line()
-            .ok_or_else(|| ImportError::Invalid("Expected StaticBody3D segment block".to_string()))?;
-        let segment_name = parse_node_line(segment_line, "StaticBody3D", Some("."))?;
+    fn parse_segment(
+        &mut self,
+        resources: &[ResourceRecord],
+        expected_parent: &str,
+    ) -> Result<RawSegment, ImportError> {
+        let segment_line = self.next_line().ok_or_else(|| {
+            ImportError::Invalid("Expected StaticBody3D segment block".to_string())
+        })?;
+        let segment_name = parse_node_line(segment_line, "StaticBody3D", Some(expected_parent))?;
         let segment_id = parse_suffix_id(&segment_name, "Segment_")?;
+        let segment_path = if expected_parent == "." {
+            segment_name.clone()
+        } else {
+            format!("{expected_parent}/{segment_name}")
+        };
 
         let transform_line = self
             .next_line()
@@ -480,25 +580,82 @@ impl<'a> SceneParser<'a> {
             ));
         }
 
-        let mesh_node_line = self
-            .next_line()
-            .ok_or_else(|| ImportError::Invalid("Expected MeshInstance3D node".to_string()))?;
-        parse_node_line(mesh_node_line, "MeshInstance3D", Some(&segment_name))?;
+        let mut mesh_id = None;
+        let mut shape_id = None;
 
-        let mesh_line = self
-            .next_line()
-            .ok_or_else(|| ImportError::Invalid("Expected mesh resource reference".to_string()))?;
-        let mesh_id = parse_resource_reference(mesh_line, "mesh = SubResource(\"BoxMesh_")?;
+        while mesh_id.is_none() || shape_id.is_none() {
+            let line = self
+                .peek_line()
+                .ok_or_else(|| ImportError::Invalid("Unexpected end of segment".to_string()))?;
 
-        let collision_line = self
-            .next_line()
-            .ok_or_else(|| ImportError::Invalid("Expected CollisionShape3D node".to_string()))?;
-        parse_node_line(collision_line, "CollisionShape3D", Some(&segment_name))?;
+            if line.starts_with("[node name=\"") && line.contains(" type=\"MeshInstance3D\"") {
+                let mesh_node_line = self.next_line().unwrap();
+                parse_node_line(mesh_node_line, "MeshInstance3D", Some(&segment_path))?;
 
-        let shape_line = self
-            .next_line()
-            .ok_or_else(|| ImportError::Invalid("Expected collision shape reference".to_string()))?;
-        let shape_id = parse_resource_reference(shape_line, "shape = SubResource(\"BoxShape3D_")?;
+                while let Some(next_line) = self.peek_line() {
+                    if next_line.starts_with("[node name=\"") {
+                        break;
+                    }
+
+                    let property_line = self.next_line().unwrap();
+                    if property_line.starts_with("mesh = SubResource(\"BoxMesh_") {
+                        let candidate_mesh_id = parse_resource_reference(
+                            property_line,
+                            "mesh = SubResource(\"BoxMesh_",
+                        )?;
+
+                        if let Some(existing_mesh_id) = mesh_id {
+                            if existing_mesh_id != candidate_mesh_id {
+                                return Err(ImportError::Unsupported(
+                                    "Segment contains multiple MeshInstance3D nodes with different mesh ids".to_string(),
+                                ));
+                            }
+                        } else {
+                            mesh_id = Some(candidate_mesh_id);
+                        }
+                    }
+                }
+            } else if line.starts_with("[node name=\"")
+                && line.contains(" type=\"CollisionShape3D\"")
+            {
+                let collision_line = self.next_line().unwrap();
+                parse_node_line(collision_line, "CollisionShape3D", Some(&segment_path))?;
+
+                while let Some(next_line) = self.peek_line() {
+                    if next_line.starts_with("[node name=\"") {
+                        break;
+                    }
+
+                    let property_line = self.next_line().unwrap();
+                    if property_line.starts_with("shape = SubResource(\"BoxShape3D_") {
+                        let candidate_shape_id = parse_resource_reference(
+                            property_line,
+                            "shape = SubResource(\"BoxShape3D_",
+                        )?;
+
+                        if let Some(existing_shape_id) = shape_id {
+                            if existing_shape_id != candidate_shape_id {
+                                return Err(ImportError::Unsupported(
+                                    "Segment contains multiple CollisionShape3D nodes with different shape ids".to_string(),
+                                ));
+                            }
+                        } else {
+                            shape_id = Some(candidate_shape_id);
+                        }
+                    }
+                }
+            } else {
+                return Err(ImportError::Invalid(format!(
+                    "Unexpected segment content: {line}"
+                )));
+            }
+        }
+
+        let mesh_id = mesh_id
+            .ok_or_else(|| ImportError::Invalid("Missing mesh instance in segment".to_string()))?;
+        let shape_id = shape_id.ok_or_else(|| {
+            ImportError::Invalid("Missing collision shape in segment".to_string())
+        })?;
 
         if mesh_id != segment_id || shape_id != segment_id {
             return Err(ImportError::Unsupported(
@@ -516,6 +673,19 @@ impl<'a> SceneParser<'a> {
             offset_x,
             offset_y,
         })
+    }
+}
+
+impl<'a> SceneParser<'a> {
+    fn skip_node_block(&mut self) {
+        self.next_line();
+
+        while let Some(line) = self.peek_line() {
+            if line.starts_with("[node name=\"") {
+                break;
+            }
+            self.next_line();
+        }
     }
 }
 
@@ -610,6 +780,29 @@ fn parse_vector3_line(line: &str, prefix: &str) -> Result<(f32, f32, f32), Impor
     ))
 }
 
+fn parse_vector2_line(line: &str, prefix: &str) -> Result<(f32, f32), ImportError> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with(prefix) || !trimmed.ends_with(')') {
+        return Err(ImportError::Unsupported(format!(
+            "Unsupported vector line: {line}"
+        )));
+    }
+
+    let values = &trimmed[prefix.len()..trimmed.len() - 1];
+    let parts: Vec<_> = values.split(',').map(|part| part.trim()).collect();
+
+    if parts.len() != 2 {
+        return Err(ImportError::Invalid(format!(
+            "Expected two Vector2 components in `{line}`"
+        )));
+    }
+
+    Ok((
+        parse_f32(parts[0], "vector component")?,
+        parse_f32(parts[1], "vector component")?,
+    ))
+}
+
 fn parse_transform(line: &str) -> Result<(f32, f32, f32), ImportError> {
     let trimmed = line.trim();
     let prefix = "transform = Transform3D(";
@@ -669,20 +862,32 @@ fn parse_suffix_id(value: &str, prefix: &str) -> Result<usize, ImportError> {
 }
 
 fn parse_f32(value: &str, label: &str) -> Result<f32, ImportError> {
-    value.parse::<f32>().map_err(|_| {
-        ImportError::Invalid(format!("Failed to parse {label} from `{value}`"))
-    })
+    value
+        .parse::<f32>()
+        .map_err(|_| ImportError::Invalid(format!("Failed to parse {label} from `{value}`")))
 }
 
 fn parse_usize(value: &str, label: &str) -> Result<usize, ImportError> {
-    value.parse::<usize>().map_err(|_| {
-        ImportError::Invalid(format!("Failed to parse {label} from `{value}`"))
-    })
+    value
+        .parse::<usize>()
+        .map_err(|_| ImportError::Invalid(format!("Failed to parse {label} from `{value}`")))
+}
+
+fn parse_bool(value: &str, label: &str) -> Result<bool, ImportError> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(ImportError::Invalid(format!(
+            "Failed to parse {label} from `{value}`"
+        ))),
+    }
 }
 
 fn float_to_index(value: f32, label: &str) -> Result<usize, ImportError> {
     if !value.is_finite() || value < 0.0 {
-        return Err(ImportError::Invalid(format!("Invalid {label} value: {value}")));
+        return Err(ImportError::Invalid(format!(
+            "Invalid {label} value: {value}"
+        )));
     }
 
     let rounded = value.round();
@@ -699,12 +904,14 @@ fn float_to_index(value: f32, label: &str) -> Result<usize, ImportError> {
 mod tests {
     use super::*;
     use crate::godot_scene::generate_scene;
+    use crate::grid::Segment;
 
     #[test]
     fn new_export_round_trips_with_metadata() {
         let settings = ExportSettings {
             unit_size: 0.5,
             z_size: 0.1,
+            include_backplanes: true,
         };
 
         let scene = generate_scene(
@@ -733,6 +940,7 @@ mod tests {
         assert_eq!(imported.name, "GridWall");
         assert_eq!(imported.export.unit_size, 0.5);
         assert_eq!(imported.export.z_size, 0.1);
+        assert!(imported.export.include_backplanes);
         assert_eq!(imported.grid.width(), 4);
         assert_eq!(imported.grid.height(), 3);
         assert!(imported.grid.cells()[0][0]);
@@ -750,6 +958,7 @@ mod tests {
             &ExportSettings {
                 unit_size: 0.5,
                 z_size: 0.1,
+                include_backplanes: true,
             },
             &[Segment {
                 start_x: 0,
@@ -765,15 +974,43 @@ mod tests {
         assert_eq!(imported.name, "Root");
         assert_eq!(imported.export.unit_size, 0.5);
         assert_eq!(imported.export.z_size, 0.1);
+        assert!(imported.export.include_backplanes);
         assert_eq!(imported.grid.width(), 1);
         assert_eq!(imported.grid.height(), 1);
         assert!(imported.grid.cells()[0][0]);
     }
 
     #[test]
+    fn export_without_backplanes_round_trips_setting() {
+        let scene = generate_scene(
+            "Root",
+            2,
+            2,
+            &ExportSettings {
+                unit_size: 0.5,
+                z_size: 0.1,
+                include_backplanes: false,
+            },
+            &[Segment {
+                start_x: 0,
+                start_y: 0,
+                width: 1,
+                height: 1,
+            }],
+        );
+
+        let imported = import_scene(&scene).expect("scene should import");
+
+        assert!(!imported.export.include_backplanes);
+    }
+
+    #[test]
     fn importer_rejects_unexpected_scene_structure() {
         let scene = "[gd_scene format=3]\n\n[node name=\"Root\" type=\"Node2D\"]\n";
 
-        assert!(matches!(import_scene(scene), Err(ImportError::Unsupported(_))));
+        assert!(matches!(
+            import_scene(scene),
+            Err(ImportError::Unsupported(_))
+        ));
     }
 }

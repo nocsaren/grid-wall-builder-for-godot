@@ -2,11 +2,12 @@
 //!
 //! The editor interaction is grid/2D-like (paint cells), but the export is 3D:
 //! each merged wall segment becomes a Godot `StaticBody3D` with a `BoxMesh` and
-//! `BoxShape3D`. The `z_size` setting controls the thickness of each wall along
-//! Godot's Z axis.
+//! `BoxShape3D`. Optional back-facing `PlaneMesh` nodes can also be generated.
+//! The `z_size` setting controls the thickness of each wall along Godot's Z axis.
 
 use eframe::egui;
 use rfd::FileDialog;
+use std::path::{Path, PathBuf};
 
 use crate::godot_scene::{generate_scene, ExportSettings};
 use crate::godot_scene_import::{import_scene, ImportedScene};
@@ -25,6 +26,7 @@ pub struct App {
 
     name: String,
     output: String,
+    current_scene_path: Option<PathBuf>,
 }
 
 impl Default for App {
@@ -36,6 +38,7 @@ impl Default for App {
             export: ExportSettings {
                 unit_size: 0.5,
                 z_size: 0.1,
+                include_backplanes: true,
             },
             grid_w,
             grid_h,
@@ -44,6 +47,7 @@ impl Default for App {
             last_painted_cell: None,
             name: "GridWall".to_string(),
             output: String::new(),
+            current_scene_path: None,
         }
     }
 }
@@ -58,6 +62,26 @@ impl App {
         self.output = self.generate();
         self.paint_value = None;
         self.last_painted_cell = None;
+    }
+
+    fn current_scene_label(&self) -> &str {
+        self.current_scene_path
+            .as_deref()
+            .and_then(Path::to_str)
+            .unwrap_or("None")
+    }
+
+    fn save_to_path(&mut self, path: PathBuf) {
+        self.output = self.generate();
+
+        match std::fs::write(&path, &self.output) {
+            Ok(()) => {
+                self.current_scene_path = Some(path);
+            }
+            Err(error) => {
+                self.output = format!("Could not save file: {error}");
+            }
+        }
     }
 
     fn paint_cell(&mut self, x: usize, y: usize, value: bool) {
@@ -213,12 +237,19 @@ impl eframe::App for App {
             ui.label("Z Size");
             ui.add(egui::DragValue::new(&mut self.export.z_size).speed(0.05));
 
+            ui.checkbox(&mut self.export.include_backplanes, "Add Back Planes");
+
             ui.separator();
 
             ui.label("Left drag = paint wall cell | Right drag = remove");
             self.draw_grid(ui);
 
             ui.separator();
+
+            ui.label(format!(
+                "Current Scene File: {}",
+                self.current_scene_label()
+            ));
 
             if ui.button("Generate Scene").clicked() {
                 self.output = self.generate();
@@ -231,7 +262,10 @@ impl eframe::App for App {
                 {
                     match std::fs::read_to_string(&path) {
                         Ok(text) => match import_scene(&text) {
-                            Ok(imported) => self.apply_imported_scene(imported),
+                            Ok(imported) => {
+                                self.apply_imported_scene(imported);
+                                self.current_scene_path = Some(path);
+                            }
                             Err(error) => {
                                 self.output = format!("Import failed: {error}");
                             }
@@ -244,11 +278,22 @@ impl eframe::App for App {
             }
 
             if ui.button("Save Scene").clicked() {
+                if let Some(path) = self.current_scene_path.clone() {
+                    self.save_to_path(path);
+                } else if let Some(path) = FileDialog::new()
+                    .add_filter("Godot Scene", &["tscn"])
+                    .save_file()
+                {
+                    self.save_to_path(path);
+                }
+            }
+
+            if ui.button("Save Scene As").clicked() {
                 if let Some(path) = FileDialog::new()
                     .add_filter("Godot Scene", &["tscn"])
                     .save_file()
                 {
-                    std::fs::write(path, &self.output).unwrap();
+                    self.save_to_path(path);
                 }
             }
 
