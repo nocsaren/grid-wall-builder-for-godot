@@ -49,7 +49,6 @@ struct Metadata {
     grid_h: usize,
     unit_size: f32,
     z_size: f32,
-    include_backplanes: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -74,7 +73,6 @@ pub fn import_scene(text: &str) -> Result<ImportedScene, ImportError> {
 
     let mut resources = Vec::new();
     let mut raw_segments = Vec::new();
-    let mut has_backplanes = false;
     let root_name;
 
     loop {
@@ -84,6 +82,9 @@ pub fn import_scene(text: &str) -> Result<ImportedScene, ImportError> {
             }
             Some(line) if line.starts_with("[sub_resource type=\"PlaneMesh\" id=\"PlaneMesh_") => {
                 parser.skip_plane_mesh_resource()?;
+            }
+            Some(line) if line.starts_with("[sub_resource type=\"GDScript\" id=\"GDScript_") => {
+                parser.skip_gdscript_resource()?;
             }
             Some(line)
                 if line.starts_with("[node name=\"") && line.contains(" type=\"Node3D\"]") =>
@@ -126,7 +127,6 @@ pub fn import_scene(text: &str) -> Result<ImportedScene, ImportError> {
         } else if line.starts_with("[node name=\"BackPlanes\" type=\"Node3D\"")
             && line.contains(" parent=\".\"]")
         {
-            has_backplanes = true;
             parser.next_line();
             while parser.peek_line().map_or(false, |line| {
                 line.starts_with("[node name=\"") && line.contains(" parent=\"BackPlanes\"]")
@@ -156,13 +156,11 @@ pub fn import_scene(text: &str) -> Result<ImportedScene, ImportError> {
             ExportSettings {
                 unit_size: metadata.unit_size,
                 z_size: metadata.z_size,
-                include_backplanes: metadata.include_backplanes.unwrap_or(has_backplanes),
             }
         } else {
             ExportSettings {
                 unit_size: 1.0,
                 z_size: 0.1,
-                include_backplanes: has_backplanes,
             }
         };
 
@@ -239,13 +237,11 @@ pub fn import_scene(text: &str) -> Result<ImportedScene, ImportError> {
         ExportSettings {
             unit_size: metadata.unit_size,
             z_size: metadata.z_size,
-            include_backplanes: metadata.include_backplanes.unwrap_or(has_backplanes),
         }
     } else {
         ExportSettings {
             unit_size,
             z_size: infer_z_size(&resources)?,
-            include_backplanes: has_backplanes,
         }
     };
 
@@ -442,8 +438,6 @@ impl<'a> SceneParser<'a> {
         let mut grid_h = None;
         let mut unit_size = None;
         let mut z_size = None;
-        let mut include_backplanes = None;
-
         for part in line.trim_start_matches(';').split_whitespace() {
             let mut split = part.splitn(2, '=');
             let key = split.next().unwrap_or_default();
@@ -455,7 +449,7 @@ impl<'a> SceneParser<'a> {
                 "unit_size" => unit_size = Some(parse_f32(value, "unit_size")?),
                 "z_size" => z_size = Some(parse_f32(value, "z_size")?),
                 "include_backplanes" => {
-                    include_backplanes = Some(parse_bool(value, "include_backplanes")?)
+                    let _ = parse_bool(value, "include_backplanes")?;
                 }
                 _ => {
                     return Err(ImportError::Unsupported(format!(
@@ -474,7 +468,6 @@ impl<'a> SceneParser<'a> {
                 .ok_or_else(|| ImportError::Invalid("Missing unit_size metadata".to_string()))?,
             z_size: z_size
                 .ok_or_else(|| ImportError::Invalid("Missing z_size metadata".to_string()))?,
-            include_backplanes,
         })
     }
 
@@ -492,6 +485,28 @@ impl<'a> SceneParser<'a> {
             .next_line()
             .ok_or_else(|| ImportError::Invalid("Expected PlaneMesh size line".to_string()))?;
         parse_vector2_line(size_line, "size = Vector2(")?;
+        Ok(())
+    }
+
+    fn skip_gdscript_resource(&mut self) -> Result<(), ImportError> {
+        let script_line = self
+            .next_line()
+            .ok_or_else(|| ImportError::Invalid("Expected GDScript resource block".to_string()))?;
+        if !script_line.starts_with("[sub_resource type=\"GDScript\" id=\"GDScript_") {
+            return Err(ImportError::Unsupported(format!(
+                "Unsupported GDScript resource block: {script_line}"
+            )));
+        }
+
+        let source_line = self
+            .next_line()
+            .ok_or_else(|| ImportError::Invalid("Expected GDScript source line".to_string()))?;
+        if !source_line.trim().starts_with("script/source = \"") {
+            return Err(ImportError::Unsupported(format!(
+                "Unsupported GDScript resource content: {source_line}"
+            )));
+        }
+
         Ok(())
     }
 
@@ -911,7 +926,6 @@ mod tests {
         let settings = ExportSettings {
             unit_size: 0.5,
             z_size: 0.1,
-            include_backplanes: true,
         };
 
         let scene = generate_scene(
@@ -940,7 +954,6 @@ mod tests {
         assert_eq!(imported.name, "GridWall");
         assert_eq!(imported.export.unit_size, 0.5);
         assert_eq!(imported.export.z_size, 0.1);
-        assert!(imported.export.include_backplanes);
         assert_eq!(imported.grid.width(), 4);
         assert_eq!(imported.grid.height(), 3);
         assert!(imported.grid.cells()[0][0]);
@@ -958,7 +971,6 @@ mod tests {
             &ExportSettings {
                 unit_size: 0.5,
                 z_size: 0.1,
-                include_backplanes: true,
             },
             &[Segment {
                 start_x: 0,
@@ -974,34 +986,9 @@ mod tests {
         assert_eq!(imported.name, "Root");
         assert_eq!(imported.export.unit_size, 0.5);
         assert_eq!(imported.export.z_size, 0.1);
-        assert!(imported.export.include_backplanes);
         assert_eq!(imported.grid.width(), 1);
         assert_eq!(imported.grid.height(), 1);
         assert!(imported.grid.cells()[0][0]);
-    }
-
-    #[test]
-    fn export_without_backplanes_round_trips_setting() {
-        let scene = generate_scene(
-            "Root",
-            2,
-            2,
-            &ExportSettings {
-                unit_size: 0.5,
-                z_size: 0.1,
-                include_backplanes: false,
-            },
-            &[Segment {
-                start_x: 0,
-                start_y: 0,
-                width: 1,
-                height: 1,
-            }],
-        );
-
-        let imported = import_scene(&scene).expect("scene should import");
-
-        assert!(!imported.export.include_backplanes);
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //!
 //! The editor interaction is grid/2D-like (paint cells), but the export is 3D:
 //! each merged wall segment becomes a Godot `StaticBody3D` with a `BoxMesh` and
-//! `BoxShape3D`. Optional back-facing `PlaneMesh` nodes can also be generated.
+//! `BoxShape3D`.
 //! The `z_size` setting controls the thickness of each wall along Godot's Z axis.
 
 use eframe::egui;
@@ -38,7 +38,6 @@ impl Default for App {
             export: ExportSettings {
                 unit_size: 0.5,
                 z_size: 0.1,
-                include_backplanes: true,
             },
             grid_w,
             grid_h,
@@ -82,6 +81,18 @@ impl App {
                 self.output = format!("Could not save file: {error}");
             }
         }
+    }
+
+    fn clear_grid(&mut self) {
+        self.grid.clear();
+        self.paint_value = None;
+        self.last_painted_cell = None;
+    }
+
+    fn mirror_grid_left_right(&mut self) {
+        self.grid.mirror_left_right();
+        self.paint_value = None;
+        self.last_painted_cell = None;
     }
 
     fn paint_cell(&mut self, x: usize, y: usize, value: bool) {
@@ -237,12 +248,20 @@ impl eframe::App for App {
             ui.label("Z Size");
             ui.add(egui::DragValue::new(&mut self.export.z_size).speed(0.05));
 
-            ui.checkbox(&mut self.export.include_backplanes, "Add Back Planes");
-
             ui.separator();
 
             ui.label("Left drag = paint wall cell | Right drag = remove");
             self.draw_grid(ui);
+
+            ui.horizontal(|ui| {
+                if ui.button("Clear Grid").clicked() {
+                    self.clear_grid();
+                }
+
+                if ui.button("Mirror Left-Right").clicked() {
+                    self.mirror_grid_left_right();
+                }
+            });
 
             ui.separator();
 
@@ -274,17 +293,6 @@ impl eframe::App for App {
                             self.output = format!("Could not read file: {error}");
                         }
                     }
-                }
-            }
-
-            if ui.button("Save Scene").clicked() {
-                if let Some(path) = self.current_scene_path.clone() {
-                    self.save_to_path(path);
-                } else if let Some(path) = FileDialog::new()
-                    .add_filter("Godot Scene", &["tscn"])
-                    .save_file()
-                {
-                    self.save_to_path(path);
                 }
             }
 

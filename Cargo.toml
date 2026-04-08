@@ -1,6 +1,6 @@
 [package]
 name = "grid-wall-builder-for-godot"
-version = "1.3.0"
+version = "2.0.0"
 edition = "2021"
 description = "Small eframe/egui tool to draw a grid wall layout and export a Godot 4 .tscn scene."
 license = "MIT"

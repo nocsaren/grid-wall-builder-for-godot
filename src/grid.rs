@@ -73,6 +73,18 @@ impl Grid {
         self.cells = next_cells;
     }
 
+    /// Clear all painted cells.
+    pub fn clear(&mut self) {
+        for column in &mut self.cells {
+            column.fill(false);
+        }
+    }
+
+    /// Mirror the grid horizontally, swapping left and right columns.
+    pub fn mirror_left_right(&mut self) {
+        self.cells.reverse();
+    }
+
     /// Merge adjacent filled cells into rectangles.
     ///
     /// Current strategy: scan left-to-right, top-to-bottom; expand width first,
@@ -173,5 +185,31 @@ mod tests {
                 height: 2,
             }]
         );
+    }
+
+    #[test]
+    fn clear_empties_all_cells() {
+        let mut grid = Grid::new(2, 2);
+        grid.cells_mut()[0][0] = true;
+        grid.cells_mut()[1][1] = true;
+
+        grid.clear();
+
+        assert!(!grid.cells()[0][0]);
+        assert!(!grid.cells()[1][1]);
+    }
+
+    #[test]
+    fn mirror_left_right_flips_columns() {
+        let mut grid = Grid::new(3, 2);
+        grid.cells_mut()[0][0] = true;
+        grid.cells_mut()[2][1] = true;
+
+        grid.mirror_left_right();
+
+        assert!(grid.cells()[2][0]);
+        assert!(grid.cells()[0][1]);
+        assert!(!grid.cells()[0][0]);
+        assert!(!grid.cells()[2][1]);
     }
 }
